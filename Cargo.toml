@@ -1,7 +1,9 @@
 [package]
 name = "futures-black-hole"
+description = "Black hole implementation for futures"
 version = "0.1.0"
 authors = ["Yota Toyama <raviqqe@gmail.com>"]
+license = "MIT"
 
 [dependencies]
 futures-await = "0.1"
