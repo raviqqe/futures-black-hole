@@ -41,3 +41,53 @@ impl BlackHole {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::mpsc::channel;
+    use std::thread;
+    use std::time::Duration;
+
+    use black_hole::*;
+
+    #[test]
+    fn black_hole_new() {
+        BlackHole::new();
+    }
+
+    #[test]
+    fn black_hole_release() {
+        BlackHole::new().release();
+    }
+
+    #[test]
+    fn black_hole_wait() {
+        let b = Arc::new(BlackHole::new());
+        let (s, r) = channel();
+
+        assert!(r.try_recv().is_err());
+
+        let ss = s.clone();
+        let bb = b.clone();
+        thread::spawn(move || {
+            ss.send(1).unwrap();
+            bb.wait();
+        });
+
+        thread::sleep(Duration::from_millis(100));
+
+        assert_eq!(r.recv().unwrap(), 1);
+        assert!(r.try_recv().is_err());
+
+        thread::spawn(move || {
+            s.send(2).unwrap();
+            b.release();
+        });
+
+        thread::sleep(Duration::from_millis(100));
+
+        assert_eq!(r.recv().unwrap(), 2);
+        assert!(r.try_recv().is_err());
+    }
+}
