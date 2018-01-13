@@ -1,11 +1,14 @@
-use futures::Async;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use futures::Poll;
+use futures::Async::{NotReady, Ready};
+use futures::prelude::Future;
 use futures::task;
+
 use self::Inner::*;
 
-#[derive(Debug)]
-pub struct BlackHole(Mutex<Inner>);
+#[derive(Clone, Debug)]
+pub struct BlackHole(Arc<Mutex<Inner>>);
 
 #[derive(Debug)]
 enum Inner {
@@ -15,7 +18,7 @@ enum Inner {
 
 impl BlackHole {
     pub fn new() -> BlackHole {
-        BlackHole(Mutex::new(Wait(Vec::new())))
+        BlackHole(Arc::new(Mutex::new(Wait(Vec::new()))))
     }
 
     pub fn release(&self) {
@@ -30,13 +33,18 @@ impl BlackHole {
 
         *inner = Released;
     }
+}
 
-    pub fn wait(&self) -> Async<()> {
+impl Future for BlackHole {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<(), ()> {
         match *self.0.lock().unwrap() {
-            Released => Async::Ready(()),
+            Released => Ok(Ready(())),
             Wait(ref mut tasks) => {
                 tasks.push(task::current());
-                Async::NotReady
+                Ok(NotReady)
             }
         }
     }
@@ -44,10 +52,12 @@ impl BlackHole {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::mpsc::channel;
+    use std::sync::mpsc::{channel, Sender};
     use std::thread;
     use std::time::Duration;
+
+    use futures::prelude::*;
+    use futures_cpupool::CpuPool;
 
     use black_hole::*;
 
@@ -61,33 +71,46 @@ mod tests {
         BlackHole::new().release();
     }
 
+    #[async]
+    fn send(s: Sender<i32>, b: BlackHole) -> Result<(), ()> {
+        s.send(1).unwrap();
+        await!(b)?;
+        s.send(3).unwrap();
+        Ok(())
+    }
+
+    #[async]
+    fn release(s: Sender<i32>, b: BlackHole) -> Result<(), ()> {
+        s.send(2).unwrap();
+        b.release();
+        Ok(())
+    }
+
     #[test]
     fn black_hole_wait() {
-        let b = Arc::new(BlackHole::new());
+        let p = CpuPool::new_num_cpus();
+
+        let b = BlackHole::new();
         let (s, r) = channel();
 
         assert!(r.try_recv().is_err());
 
-        let ss = s.clone();
-        let bb = b.clone();
-        thread::spawn(move || {
-            ss.send(1).unwrap();
-            bb.wait();
-        });
+        let f1 = p.spawn(send(s.clone(), b.clone()));
 
         thread::sleep(Duration::from_millis(100));
-
         assert_eq!(r.recv().unwrap(), 1);
         assert!(r.try_recv().is_err());
 
-        thread::spawn(move || {
-            s.send(2).unwrap();
-            b.release();
-        });
+        let f2 = p.spawn(release(s.clone(), b.clone()));
 
         thread::sleep(Duration::from_millis(100));
-
         assert_eq!(r.recv().unwrap(), 2);
+
+        thread::sleep(Duration::from_millis(100));
+        assert_eq!(r.recv().unwrap(), 3);
         assert!(r.try_recv().is_err());
+
+        assert!(f1.wait().is_ok());
+        assert!(f2.wait().is_ok());
     }
 }
