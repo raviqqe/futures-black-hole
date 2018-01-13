@@ -53,7 +53,7 @@ impl Future for BlackHole {
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc::{channel, Sender};
-    use std::thread;
+    use std::thread::sleep;
     use std::time::Duration;
 
     use futures::prelude::*;
@@ -97,16 +97,16 @@ mod tests {
 
         let f1 = p.spawn(send(s.clone(), b.clone()));
 
-        thread::sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(100));
         assert_eq!(r.recv().unwrap(), 1);
         assert!(r.try_recv().is_err());
 
         let f2 = p.spawn(release(s.clone(), b.clone()));
 
-        thread::sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(100));
         assert_eq!(r.recv().unwrap(), 2);
 
-        thread::sleep(Duration::from_millis(100));
+        sleep(Duration::from_millis(100));
         assert_eq!(r.recv().unwrap(), 3);
         assert!(r.try_recv().is_err());
 
