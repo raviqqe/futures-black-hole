@@ -18,7 +18,7 @@ impl BlackHole {
         BlackHole(Mutex::new(Wait(Vec::new())))
     }
 
-    pub fn release(&mut self) {
+    pub fn release(&self) {
         let mut inner = self.0.lock().unwrap();
 
         match *inner {
@@ -31,7 +31,7 @@ impl BlackHole {
         *inner = Released;
     }
 
-    pub fn wait(&mut self) -> Async<()> {
+    pub fn wait(&self) -> Async<()> {
         match *self.0.lock().unwrap() {
             Released => Async::Ready(()),
             Wait(ref mut tasks) => {
