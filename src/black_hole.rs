@@ -33,6 +33,15 @@ impl BlackHole {
     }
 }
 
+impl Future for BlackHole {
+    type Item = ();
+    type Error = BlackHoleError;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        (&*self).poll()
+    }
+}
+
 impl<'a> Future for &'a BlackHole {
     type Item = ();
     type Error = BlackHoleError;
