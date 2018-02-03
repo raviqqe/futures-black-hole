@@ -1,46 +1,44 @@
-use std::sync::{Arc, Mutex};
+use std::error::Error;
+use std::fmt::{self, Display, Formatter};
+use std::sync::{Mutex, PoisonError};
 
 use futures::Poll;
 use futures::Async::{NotReady, Ready};
 use futures::prelude::Future;
-use futures::task;
+use futures::task::{self, Task};
 
 use self::Inner::*;
 
-#[derive(Clone, Debug)]
-pub struct BlackHole(Arc<Mutex<Inner>>);
-
 #[derive(Debug)]
-enum Inner {
-    Released,
-    Wait(Vec<task::Task>),
-}
+pub struct BlackHole(Mutex<Inner>);
 
 impl BlackHole {
-    pub fn new() -> BlackHole {
-        BlackHole(Arc::new(Mutex::new(Wait(Vec::new()))))
+    pub fn new() -> Self {
+        BlackHole(Mutex::new(Wait(vec![])))
     }
 
-    pub fn release(&self) {
-        let mut inner = self.0.lock().unwrap();
+    pub fn release(&self) -> Result<(), BlackHoleError> {
+        let mut inner = self.0.lock()?;
 
         match *inner {
-            Released => panic!("BlackHole is released twice"),
+            Released => return Err(BlackHoleError::new("black hole is released twice")),
             Wait(ref tasks) => for task in tasks {
                 task.notify();
             },
         }
 
         *inner = Released;
+
+        Ok(())
     }
 }
 
-impl Future for BlackHole {
+impl<'a> Future for &'a BlackHole {
     type Item = ();
-    type Error = ();
+    type Error = BlackHoleError;
 
-    fn poll(&mut self) -> Poll<(), ()> {
-        match *self.0.lock().unwrap() {
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match *self.0.lock()? {
             Released => Ok(Ready(())),
             Wait(ref mut tasks) => {
                 tasks.push(task::current());
@@ -50,8 +48,42 @@ impl Future for BlackHole {
     }
 }
 
+#[derive(Debug)]
+enum Inner {
+    Released,
+    Wait(Vec<Task>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlackHoleError(String);
+
+impl BlackHoleError {
+    fn new(s: &str) -> Self {
+        BlackHoleError(s.to_string())
+    }
+}
+
+impl Display for BlackHoleError {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Error for BlackHoleError {
+    fn description(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<T> From<PoisonError<T>> for BlackHoleError {
+    fn from(e: PoisonError<T>) -> Self {
+        BlackHoleError::new(e.description())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::sync::mpsc::{channel, Sender};
     use std::thread::sleep;
     use std::time::Duration;
@@ -59,7 +91,29 @@ mod tests {
     use futures::prelude::*;
     use futures_cpupool::CpuPool;
 
-    use black_hole::*;
+    use super::*;
+
+    #[derive(Clone, Debug)]
+    struct ArcBlackHole(Arc<BlackHole>);
+
+    impl ArcBlackHole {
+        fn new() -> Self {
+            ArcBlackHole(Arc::new(BlackHole::new()))
+        }
+
+        fn release(&self) -> Result<(), BlackHoleError> {
+            self.0.release()
+        }
+    }
+
+    impl Future for ArcBlackHole {
+        type Item = ();
+        type Error = BlackHoleError;
+
+        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+            (&*self.0).poll()
+        }
+    }
 
     #[test]
     fn black_hole_new() {
@@ -68,11 +122,11 @@ mod tests {
 
     #[test]
     fn black_hole_release() {
-        BlackHole::new().release();
+        BlackHole::new().release().unwrap();
     }
 
     #[async]
-    fn send(s: Sender<i32>, b: BlackHole) -> Result<(), ()> {
+    fn send(s: Sender<i32>, b: ArcBlackHole) -> Result<(), BlackHoleError> {
         s.send(1).unwrap();
         await!(b)?;
         s.send(3).unwrap();
@@ -80,9 +134,9 @@ mod tests {
     }
 
     #[async]
-    fn release(s: Sender<i32>, b: BlackHole) -> Result<(), ()> {
+    fn release(s: Sender<i32>, b: ArcBlackHole) -> Result<(), BlackHoleError> {
         s.send(2).unwrap();
-        b.release();
+        b.release()?;
         Ok(())
     }
 
@@ -90,7 +144,7 @@ mod tests {
     fn black_hole_wait() {
         let p = CpuPool::new_num_cpus();
 
-        let b = BlackHole::new();
+        let b = ArcBlackHole::new();
         let (s, r) = channel();
 
         assert!(r.try_recv().is_err());
