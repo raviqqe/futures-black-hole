@@ -7,3 +7,4 @@ extern crate futures_cpupool;
 mod black_hole;
 
 pub use black_hole::BlackHole;
+pub use black_hole::BlackHoleError;
